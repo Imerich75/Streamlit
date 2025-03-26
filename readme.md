@@ -7,24 +7,6 @@ Built with Streamlit, powered by open data and Random Forest models.
 🚀 Live Demo
 👉 Launch the app on Streamlit Community Cloud
 
-📁 Project Structure
-bash
-Copy
-Edit
-.
-├── app.py                     # Main Streamlit launcher
-├── pages/                    # Modular Streamlit pages
-│   ├── 1_Vanilla_BI.py
-│   ├── 2_Risk_Discrepancy.py
-│   └── ... 
-├── datasets/                 # Cleaned & enriched data files
-│   ├── future_predictions.csv
-│   ├── predictions_enriched.csv
-│   └── ...
-├── ml_predict_attacks.py     # Model training & evaluation
-├── future.py                 # Forecast generation (2025–2030)
-├── requirements.txt
-└── README.md
 🔍 Key Features
 📈 Forecast Visualization: Projected attack counts by country from 2025 to 2030
 
@@ -60,7 +42,7 @@ Internet usage & infrastructure stats (ITU, UN, open sources)
 bash
 Copy
 Edit
-git clone https://github.com/your-username/cyber-risk-dashboard.git
+git clone https://github.com/Imerich75/Streamlit
 cd cyber-risk-dashboard
 pip install -r requirements.txt
 streamlit run app.py
