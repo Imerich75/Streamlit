@@ -1,69 +1,62 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import numpy as np
+import plotly.express as px
 
 st.set_page_config(layout="wide")
-st.title("🌍 Z-Error Choropleth (Log Distance from Zero)")
+st.title("🕵️ Transparency Heatmap – Reporting Honesty Index")
 
 @st.cache_data
 def load_data():
     df = pd.read_csv("predictions_enriched.csv").copy()
-    # 1) Check we have Z_Error
-    if "Z_Error" not in df.columns:
-        st.error("`Z_Error` column not found. Please ensure your ML pipeline sets it.")
+
+    required = ["Attack_Count", "Predicted_Attack_Count", "ISO3", "Year"]
+    if not all(col in df.columns for col in required):
+        st.error("Missing required columns in the dataset.")
         st.stop()
-    # 2) Create logZ = sign(Z_Error) * log10(1 + |Z_Error|)
-    df["logZ"] = np.where(
-        df["Z_Error"].isna(),
-        np.nan,
-        np.sign(df["Z_Error"]) * np.log10(1 + df["Z_Error"].abs())
-    )
+
+    # Compute Reporting Honesty Index: log10((Attack+1)/(Predicted+1))
+    df["Honesty_Index"] = np.log10((df["Attack_Count"] + 1) / (df["Predicted_Attack_Count"] + 1))
     return df
 
 df = load_data()
 
-# === Sidebar
-st.sidebar.header("🗂 Filter")
+# Sidebar – year selector
+st.sidebar.header("📅 Filter")
 years = sorted(df["Year"].dropna().unique())
-default_year = years[-1] if len(years)>0 else None
+default_year = years[-1] if years else None
 selected_year = st.sidebar.selectbox("Select Year", years, index=years.index(default_year) if default_year else 0)
 
-filtered_df = df[df["Year"] == selected_year].copy()
-if filtered_df.empty:
-    st.warning(f"No data for year {selected_year}.")
+filtered = df[df["Year"] == selected_year].copy()
+if filtered.empty:
+    st.warning("No data available for this year.")
     st.stop()
 
-# === Compute min/max of logZ to define color range
-min_logz = filtered_df["logZ"].min()
-max_logz = filtered_df["logZ"].max()
-
-# We want symmetrical scale around 0, so:
-abs_max = max(abs(min_logz), abs(max_logz))
+# Color range based on symmetric max
+min_val = filtered["Honesty_Index"].min()
+max_val = filtered["Honesty_Index"].max()
+abs_max = max(abs(min_val), abs(max_val))
 range_color = (-abs_max, abs_max)
 
-title = f"Z-Error Choropleth (Log Distance) — {selected_year}"
-
+# Heatmap
 fig = px.choropleth(
-    filtered_df,
+    filtered,
     locations="ISO3",
-    color="logZ",
+    color="Honesty_Index",
     hover_name="ISO3",
-    color_continuous_scale="RdBu",
-    color_continuous_midpoint=0,      # zero-centered
+    color_continuous_scale="RdBu_r",  # Red = underreporting, Blue = overreporting
     range_color=range_color,
-    title=title
+    color_continuous_midpoint=0,
+    title=f"Reporting Honesty Index (log10 ratio) — {selected_year}"
 )
 fig.update_geos(showcountries=True, projection_type="natural earth")
-fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
+fig.update_layout(margin=dict(r=0, l=0, t=40, b=0))
 st.plotly_chart(fig, use_container_width=True)
 
-# === Table
+# Raw data table
 with st.expander("📋 Show Raw Data"):
     st.dataframe(
-        filtered_df[
-            ["ISO3", "Year", "Attack_Count", "Predicted_Attack_Count", "Z_Error", "logZ"]
-        ],
+        filtered[["ISO3", "Year", "Attack_Count", "Predicted_Attack_Count", "Honesty_Index"]],
         use_container_width=True
     )
 
