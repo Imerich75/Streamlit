@@ -25,6 +25,7 @@ This interface integrates data engineering, enrichment, machine learning predict
 - 🔍 Log-Scaled Visuals
 - 📂 Raw Data Browser
 - 📈 2025–2030 Forecast
+- 🚗 Forgalmi térkép (Magyar Közút ÉÁNF 2025)
 """)
 
 # Optional: Add visual cue for data freshness
