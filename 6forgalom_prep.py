@@ -67,9 +67,10 @@ df["Nehez_arany"] = (df["Nehez_nap"] / df["Jarmu_nap"]).where(df["Jarmu_nap"] > 
 # Daily traffic performance on the section (unit vehicle-km per day)
 df["Ejkm_nap"] = df["EANF"] * df["Hossz_km"]
 
-df = df.dropna(subset=["EANF"])
+df = df.dropna(subset=["EANF"]).reset_index(drop=True)
+df["Szakasz_id"] = df.index
 
-keep = ["Utkategoria", "Ut", "Megye", "Szelveny", "Kezdet_km", "Veg_km", "Hossz_km",
+keep = ["Szakasz_id", "Utkategoria", "Ut", "Megye", "Szelveny", "Kezdet_km", "Veg_km", "Hossz_km",
         "Fekves", "Adatforras", "EANF", "MOF", "Jarmu_nap", "Nehez_nap", "Nehez_arany",
         "Ejkm_nap"] + vehicle_cols + ["Kerekpar"]
 df[keep].to_csv(OUT_CSV, index=False)
