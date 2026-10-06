@@ -1,4 +1,6 @@
+import gzip
 import json
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -16,6 +18,12 @@ st.markdown(
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 SEQ_BLUE = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
 BAR_BLUE = "#2a78d6"
+# Traffic-map convention: light yellow (quiet) to dark red (busy)
+LINE_COLORS = ["#fcd34d", "#fbbf24", "#f59e0b", "#ea580c", "#dc2626", "#b91c1c", "#7f1d1d"]
+LINE_METRICS = {
+    "ÉÁNF (Ej/nap)": ("EANF", [0, 1_000, 2_500, 5_000, 10_000, 20_000, 40_000], "{:,.0f}"),
+    "Nehézgépjármű-arány (%)": ("Nehez_szazalek", [0, 5, 10, 15, 20, 30, 40], "{:.0f}"),
+}
 
 VEHICLE_LABELS = {
     "Szemelyauto": "Személygépkocsi",
@@ -38,7 +46,18 @@ def load_data():
     return df, geo
 
 
+@st.cache_data
+def load_geometry():
+    path = DATA_DIR / "eanf_2025_geom.json.gz"
+    if not path.exists():
+        return {}, {}
+    with gzip.open(path, "rt", encoding="utf-8") as f:
+        data = json.load(f)
+    return {int(k): v for k, v in data["sections"].items()}, data["roads"]
+
+
 df, geo = load_data()
+section_geom, road_info = load_geometry()
 
 # === Sidebar filters
 st.sidebar.header("🔎 Szűrők")
@@ -67,7 +86,8 @@ k2.metric("Úthossz", f"{total_km:,.0f} km".replace(",", " "))
 k3.metric("Átlagos ÉÁNF (hosszal súlyozva)", f"{weighted_eanf:,.0f} Ej/nap".replace(",", " "))
 k4.metric("Mért szakaszok aránya", f"{measured_share:.0%}")
 
-tab_map, tab_roads, tab_profile, tab_mix, tab_data = st.tabs([
+tab_lines, tab_map, tab_roads, tab_profile, tab_mix, tab_data = st.tabs([
+    "🛣️ Útszakasz-térkép",
     "🗺️ Megyei térkép",
     "🏆 Legforgalmasabb utak",
     "📈 Útprofil",
@@ -75,7 +95,90 @@ tab_map, tab_roads, tab_profile, tab_mix, tab_data = st.tabs([
     "📋 Adatok",
 ])
 
-# --- Tab 1: County choropleth
+# --- Tab 1: Road sections drawn on the map, coloured by traffic
+with tab_lines:
+    if not section_geom:
+        st.info("Az útszakaszok geometriája hiányzik – futtasd a 7forgalom_geometry.py-t.")
+    else:
+        c1, c2, c3 = st.columns([2, 2, 3])
+        line_label = c1.selectbox("Színezés", list(LINE_METRICS))
+        county_names = sorted(m for m in filtered["Megye"].unique() if m != "Ismeretlen")
+        county = c2.selectbox("Megye", ["Teljes ország"] + county_names)
+        road_names = sorted(filtered["Ut"].unique(),
+                            key=lambda r: (not r.startswith("M"), len(r), r))
+        picked = c3.multiselect("Csak ezek az utak", road_names, placeholder="Összes út")
+
+        line_col, bins, fmt = LINE_METRICS[line_label]
+        shown = filtered[filtered["Szakasz_id"].isin(section_geom)].assign(
+            Nehez_szazalek=lambda d: 100 * d["Nehez_arany"])
+        if county != "Teljes ország":
+            shown = shown[shown["Megye"] == county]
+        if picked:
+            shown = shown[shown["Ut"].isin(picked)]
+        shown = shown.dropna(subset=[line_col])
+
+        fig_lines = go.Figure()
+        lons_all, lats_all = [], []
+        # One trace per colour class: lines separated by None gaps keep the figure light
+        edges = [-math.inf] + bins[1:] + [math.inf]
+        classes = pd.cut(shown[line_col], edges, labels=False, right=False)
+        for i, color in enumerate(LINE_COLORS):
+            part = shown[classes == i]
+            lons, lats, hover = [], [], []
+            for row in part.itertuples():
+                coords = section_geom[row.Szakasz_id]
+                info = road_info.get(row.Ut, {})
+                text = (f"<b>{row.Ut}</b> ({row.Utkategoria}), {row.Megye}<br>"
+                        f"{row.Kezdet_km:.3f}–{row.Veg_km:.3f} km<br>"
+                        f"ÉÁNF: {row.EANF:,.0f} Ej/nap · nehéz: {row.Nehez_szazalek:.1f}%<br>"
+                        f"Adat: {row.Adatforras} · hely: {info.get('kalibracio', '?')}")
+                lons += [c[0] for c in coords] + [None]
+                lats += [c[1] for c in coords] + [None]
+                hover += [text] * len(coords) + [None]
+            lons_all += lons
+            lats_all += lats
+            if i == 0:
+                name = f"< {fmt.format(bins[1])}"
+            elif i == len(LINE_COLORS) - 1:
+                name = f"≥ {fmt.format(bins[-1])}"
+            else:
+                name = f"{fmt.format(bins[i])} – {fmt.format(bins[i + 1])}"
+            fig_lines.add_trace(go.Scattermap(
+                lon=lons, lat=lats, mode="lines", name=name.replace(",", " "),
+                line=dict(color=color, width=1.5 + 0.6 * i),
+                hovertext=hover, hoverinfo="text",
+            ))
+
+        lon_vals = [x for x in lons_all if x is not None]
+        lat_vals = [y for y in lats_all if y is not None]
+        if lon_vals:
+            span = max(max(lon_vals) - min(lon_vals), 1.6 * (max(lat_vals) - min(lat_vals)), 0.05)
+            center = {"lon": (min(lon_vals) + max(lon_vals)) / 2,
+                      "lat": (min(lat_vals) + max(lat_vals)) / 2}
+            zoom = max(5.5, min(12.0, math.log2(360 / span) + 0.6))
+        else:
+            center, zoom = {"lat": 47.16, "lon": 19.5}, 6
+        fig_lines.update_layout(
+            map=dict(style="carto-positron", center=center, zoom=zoom),
+            height=640, margin=dict(r=0, l=0, t=10, b=0),
+            legend=dict(title=line_label, yanchor="top", y=0.98, xanchor="left", x=0.01,
+                        bgcolor="rgba(255,255,255,0.85)"),
+        )
+        st.plotly_chart(fig_lines, use_container_width=True)
+
+        drawn = filtered["Szakasz_id"].isin(section_geom)
+        km_drawn = filtered.loc[drawn, "Hossz_km"].sum() / filtered["Hossz_km"].sum()
+        stones = shown["Ut"].map(lambda r: road_info.get(r, {}).get("kalibracio", ""))
+        stone_share = shown.loc[stones.str.startswith("kilométerkő"), "Hossz_km"].sum() / \
+            max(shown["Hossz_km"].sum(), 1e-9)
+        st.caption(
+            f"A szűrt úthossz {km_drawn:.0%}-a van a térképen; a megjelenített hossz "
+            f"{stone_share:.0%}-ánál a szelvényezést OSM-kilométerkövekhez kalibráltuk, a többinél "
+            "az út hossza mentén arányosan osztottuk fel (néhány száz méteres eltérés lehet). "
+            "Útvonalak: © OpenStreetMap-közreműködők (ODbL), saját Overpass szerverről."
+        )
+
+# --- Tab 2: County choropleth
 with tab_map:
     metrics = {
         "Átlagos ÉÁNF (Ej/nap, hosszal súlyozva)": "Atlag_EANF",
@@ -151,7 +254,7 @@ with tab_map:
         "a fővárosi utak nem, ezért a budapesti átlag felfelé torzít."
     )
 
-# --- Tab 2: Busiest roads
+# --- Tab 3: Busiest roads
 with tab_roads:
     roads = with_length.groupby(["Ut", "Utkategoria"]).agg(
         Hossz_km=("Hossz_km", "sum"),
@@ -174,7 +277,7 @@ with tab_roads:
     fig_top.update_layout(height=max(350, 28 * top_n), margin=dict(t=10), bargap=0.35)
     st.plotly_chart(fig_top, use_container_width=True)
 
-# --- Tab 3: Traffic profile along a single road
+# --- Tab 4: Traffic profile along a single road
 with tab_profile:
     road_lengths = with_length.groupby("Ut")["Hossz_km"].sum()
     road_options = sorted(
@@ -210,7 +313,7 @@ with tab_profile:
         f"érintett megyék: {', '.join(sections['Megye'].unique())}."
     )
 
-# --- Tab 4: Vehicle mix (vehicle-km weighted)
+# --- Tab 5: Vehicle mix (vehicle-km weighted)
 with tab_mix:
     mix = pd.DataFrame({
         "Járműkategória": list(VEHICLE_LABELS.values()),
@@ -230,7 +333,7 @@ with tab_mix:
     st.plotly_chart(fig_mix, use_container_width=True)
     st.caption("A kerékpáros forgalom nem szerepel a gépjármű-összetételben.")
 
-# --- Tab 5: Raw data
+# --- Tab 6: Raw data
 with tab_data:
     columns = {
         "Utkategoria": "Útkategória", "Ut": "Út", "Megye": "Megye",
