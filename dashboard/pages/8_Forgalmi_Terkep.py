@@ -54,10 +54,11 @@ def load_data():
 def load_geometry():
     path = DATA_DIR / "eanf_2025_geom.json.gz"
     if not path.exists():
-        return {}, {}, []
+        return {}, {}, [], {}
     with gzip.open(path, "rt", encoding="utf-8") as f:
         data = json.load(f)
-    return {int(k): v for k, v in data["sections"].items()}, data["roads"], data.get("gaps", [])
+    return ({int(k): v for k, v in data["sections"].items()}, data["roads"], data.get("gaps", []),
+            {int(k): v for k, v in data.get("lanes", {}).items()})
 
 
 def gap_sections(gaps):
@@ -74,6 +75,7 @@ def gap_sections(gaps):
             "Kezdet_km": gap["k0"], "Veg_km": gap["k1"], "Hossz_km": gap["k1"] - gap["k0"],
             "EANF": (prev["EANF"] + nxt["EANF"]) / 2,
             "Nehez_arany": (prev["Nehez_arany"] + nxt["Nehez_arany"]) / 2,
+            "Savok": min(prev["Savok"], nxt["Savok"]),
             "Adatforras": "becsült (két szomszéd átlaga)",
             "Szomszedok": (gap["elozo"], gap["kovetkezo"]),
         })
@@ -81,7 +83,10 @@ def gap_sections(gaps):
 
 
 df, geo = load_data()
-section_geom, road_info, gaps = load_geometry()
+section_geom, road_info, gaps, lanes = load_geometry()
+# Lanes per direction from OpenStreetMap (2 = "2×2"), and whether the carriageways are separate
+df["Savok"] = df["Szakasz_id"].map(lambda i: lanes[i][0] if i in lanes else None)
+df["Osztott"] = df["Szakasz_id"].map(lambda i: lanes[i][1] if i in lanes else None)
 
 # === Sidebar filters
 st.sidebar.header("🔎 Szűrők")
@@ -89,10 +94,20 @@ categories = st.sidebar.multiselect(
     "Útkategória", CATEGORY_ORDER, default=CATEGORY_ORDER
 )
 location = st.sidebar.radio("Fekvés", ["Mind", "Külterület", "Belterület"], horizontal=True)
+LANE_FILTERS = {"Mind": None, "2×2 vagy több": (2, 99), "2×3 vagy több": (3, 99),
+                "Csak 2×1": (1, 1)}
+lane_choice = st.sidebar.selectbox(
+    "Sávszám", list(LANE_FILTERS),
+    help="Forgalmi sávok irányonként az OpenStreetMap alapján (pl. 2×2 = irányonként 2 sáv). "
+         "Csomópontoknál a gyorsító-lassító sávok miatt egy szakasz többnek látszhat.",
+)
 
 filtered = df[df["Utkategoria"].isin(categories)]
 if location != "Mind":
     filtered = filtered[filtered["Fekves"] == location]
+if LANE_FILTERS[lane_choice]:
+    lo, hi = LANE_FILTERS[lane_choice]
+    filtered = filtered[filtered["Savok"].between(lo, hi)]
 
 if filtered.empty:
     st.warning("Nincs adat a kiválasztott szűrőkkel.")
@@ -171,7 +186,8 @@ with tab_lines:
                 text = (f"<b>{row.Ut}</b> ({row.Utkategoria}), {row.Megye}<br>"
                         f"{row.Kezdet_km:.3f}–{row.Veg_km:.3f} km<br>"
                         f"ÉÁNF: {row.EANF:,.0f} Ej/nap · nehéz: {row.Nehez_szazalek:.1f}%<br>"
-                        f"Adat: {row.Adatforras} · hely: {info.get('kalibracio', '?')}")
+                        f"Sávok: {f'2×{row.Savok:.0f}' if pd.notna(row.Savok) else '?'} · "
+                        f"adat: {row.Adatforras} · hely: {info.get('kalibracio', '?')}")
                 lons += [c[0] for c in coords] + [None]
                 lats += [c[1] for c in coords] + [None]
                 hover += [text] * len(coords) + [None]
@@ -384,6 +400,7 @@ with tab_data:
         "Kezdet_km": "Kezdet (km)", "Veg_km": "Vég (km)", "Hossz_km": "Hossz (km)",
         "Fekves": "Fekvés", "Adatforras": "Adatforrás", "EANF": "ÉÁNF (Ej/nap)",
         "MOF": "MOF (Ej/óra)", "Jarmu_nap": "Jármű/nap", "Nehez_arany": "Nehézgépjármű-arány",
+        "Savok": "Sáv/irány",
     }
     table = filtered[list(columns)].assign(
         Nehez_arany=lambda d: (100 * d["Nehez_arany"]).round(1)
