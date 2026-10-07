@@ -265,7 +265,12 @@ def km_to_m_function(chain, ref, road_sections):
     return chain, lambda km: (km - offset) * 1000 * scale, "arányos"
 
 
-geometries, methods = {}, {}
+def to_lonlat(line, tolerance):
+    return [[round(x, 5), round(y, 5)] for x, y in
+            (to_deg(*xy) for xy in line.simplify(tolerance).coords)]
+
+
+geometries, methods, gaps = {}, {}, []
 for ref, road_sections in sections.dropna(subset=["Kezdet_km", "Veg_km"]).groupby("Ut"):
     if ref not in by_ref:
         continue
@@ -275,18 +280,27 @@ for ref, road_sections in sections.dropna(subset=["Kezdet_km", "Veg_km"]).groupb
     chain, km_to_m, method = km_to_m_function(chain, ref, road_sections)
     methods[ref] = (source[ref], method)
 
+    # Chainage stretches missing from the table, with the sections on either side
+    ordered = road_sections.sort_values("Kezdet_km")
+    for prev, nxt in zip(ordered.itertuples(), ordered.iloc[1:].itertuples()):
+        s0 = max(0.0, km_to_m(prev.Veg_km))
+        s1 = min(chain.length, km_to_m(nxt.Kezdet_km))
+        if nxt.Kezdet_km - prev.Veg_km > 0.05 and s1 - s0 >= 1:
+            gaps.append({"ut": ref, "k0": prev.Veg_km, "k1": nxt.Kezdet_km,
+                         "elozo": int(prev.Szakasz_id), "kovetkezo": int(nxt.Szakasz_id),
+                         "vonal": to_lonlat(substring(chain, s0, s1), 15)})
+
     for row in road_sections.itertuples():
         s0 = max(0.0, km_to_m(row.Kezdet_km))
         s1 = min(chain.length, km_to_m(row.Veg_km))
         if s1 - s0 < 1:
             continue
-        piece = substring(chain, s0, s1).simplify(15)
-        coords = [to_deg(x, y) for x, y in piece.coords]
-        geometries[int(row.Szakasz_id)] = [[round(x, 5), round(y, 5)] for x, y in coords]
+        geometries[int(row.Szakasz_id)] = to_lonlat(substring(chain, s0, s1), 15)
 
 with gzip.open(OUT, "wt", encoding="utf-8") as f:
     json.dump({"sections": geometries,
-               "roads": {ref: {"forras": src, "kalibracio": m} for ref, (src, m) in methods.items()}},
+               "roads": {ref: {"forras": src, "kalibracio": m} for ref, (src, m) in methods.items()},
+               "gaps": gaps},
               f, ensure_ascii=False, separators=(",", ":"))
 
 # === 4. Coverage report
@@ -296,5 +310,7 @@ sections["Modszer"] = sections["Modszer"].str.replace(r" \(\d+\)", "", regex=Tru
 km_share = sections.loc[sections["Geometria"], "Hossz_km"].sum() / sections["Hossz_km"].sum()
 print(f"✅ {sections['Geometria'].sum()} / {len(sections)} sections with geometry "
       f"({km_share:.0%} of road length) saved to {OUT}")
+print(f"   {len(gaps)} chainage gaps ({sum(g['k1'] - g['k0'] for g in gaps):,.0f} km) "
+      "between neighbouring sections")
 print(sections.pivot_table(index="Utkategoria", columns="Modszer", values="Hossz_km",
                            aggfunc="sum").round(0).fillna(0).to_string())

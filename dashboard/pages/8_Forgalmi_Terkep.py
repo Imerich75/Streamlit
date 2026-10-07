@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.colors import sample_colorscale
 import streamlit as st
 
 st.set_page_config(layout="wide")
@@ -18,11 +19,14 @@ st.markdown(
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 SEQ_BLUE = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
 BAR_BLUE = "#2a78d6"
-# Traffic-map convention: light yellow (quiet) to dark red (busy)
-LINE_COLORS = ["#fcd34d", "#fbbf24", "#f59e0b", "#ea580c", "#dc2626", "#b91c1c", "#7f1d1d"]
+# Traffic-map convention: light yellow (quiet) through red to dark purple (busy)
+LINE_SCALE = ["#ffe680", "#fdb44b", "#f7782a", "#e2401f", "#bb1428", "#860632", "#4b0a3c"]
+# Lower class bounds; the last class is open-ended
 LINE_METRICS = {
-    "ÉÁNF (Ej/nap)": ("EANF", [0, 1_000, 2_500, 5_000, 10_000, 20_000, 40_000], "{:,.0f}"),
-    "Nehézgépjármű-arány (%)": ("Nehez_szazalek", [0, 5, 10, 15, 20, 30, 40], "{:.0f}"),
+    "ÉÁNF (Ej/nap)": ("EANF", [0, 500, 1_000, 2_000, 3_000, 5_000, 7_500, 10_000, 15_000,
+                               20_000, 30_000, 45_000, 60_000, 80_000], "{:,.0f}"),
+    "Nehézgépjármű-arány (%)": ("Nehez_szazalek", [0, 2, 4, 6, 8, 10, 12, 15, 20, 25, 30, 40],
+                                "{:.0f}"),
 }
 
 VEHICLE_LABELS = {
@@ -50,14 +54,34 @@ def load_data():
 def load_geometry():
     path = DATA_DIR / "eanf_2025_geom.json.gz"
     if not path.exists():
-        return {}, {}
+        return {}, {}, []
     with gzip.open(path, "rt", encoding="utf-8") as f:
         data = json.load(f)
-    return {int(k): v for k, v in data["sections"].items()}, data["roads"]
+    return {int(k): v for k, v in data["sections"].items()}, data["roads"], data.get("gaps", [])
+
+
+def gap_sections(gaps):
+    """Stretches missing from the table, valued as the mean of the two neighbouring sections."""
+    by_id = df.set_index("Szakasz_id")
+    rows, geom = [], {}
+    for i, gap in enumerate(gaps):
+        prev, nxt = by_id.loc[gap["elozo"]], by_id.loc[gap["kovetkezo"]]
+        sid = -1 - i  # negative ids never clash with real sections
+        geom[sid] = gap["vonal"]
+        rows.append({
+            "Szakasz_id": sid, "Ut": gap["ut"], "Utkategoria": prev["Utkategoria"],
+            "Megye": prev["Megye"], "Fekves": prev["Fekves"],
+            "Kezdet_km": gap["k0"], "Veg_km": gap["k1"], "Hossz_km": gap["k1"] - gap["k0"],
+            "EANF": (prev["EANF"] + nxt["EANF"]) / 2,
+            "Nehez_arany": (prev["Nehez_arany"] + nxt["Nehez_arany"]) / 2,
+            "Adatforras": "becsült (két szomszéd átlaga)",
+            "Szomszedok": (gap["elozo"], gap["kovetkezo"]),
+        })
+    return pd.DataFrame(rows), geom
 
 
 df, geo = load_data()
-section_geom, road_info = load_geometry()
+section_geom, road_info, gaps = load_geometry()
 
 # === Sidebar filters
 st.sidebar.header("🔎 Szűrők")
@@ -100,13 +124,18 @@ with tab_lines:
     if not section_geom:
         st.info("Az útszakaszok geometriája hiányzik – futtasd a 7forgalom_geometry.py-t.")
     else:
-        c1, c2, c3 = st.columns([2, 2, 3])
+        c1, c2, c3, c4 = st.columns([2, 2, 3, 2])
         line_label = c1.selectbox("Színezés", list(LINE_METRICS))
         county_names = sorted(m for m in filtered["Megye"].unique() if m != "Ismeretlen")
         county = c2.selectbox("Megye", ["Teljes ország"] + county_names)
         road_names = sorted(filtered["Ut"].unique(),
                             key=lambda r: (not r.startswith("M"), len(r), r))
         picked = c3.multiselect("Csak ezek az utak", road_names, placeholder="Összes út")
+        fill_gaps = c4.checkbox(
+            "Hiányzó szakaszok kitöltése", value=True,
+            help="Ahol a Magyar Közút táblázatából kimarad egy szelvényszakasz, ott a két "
+                 "szomszédos szakasz átlagát mutatjuk (a tooltipben „becsült”).",
+        )
 
         line_col, bins, fmt = LINE_METRICS[line_label]
         shown = filtered[filtered["Szakasz_id"].isin(section_geom)].assign(
@@ -115,6 +144,15 @@ with tab_lines:
             shown = shown[shown["Megye"] == county]
         if picked:
             shown = shown[shown["Ut"].isin(picked)]
+        geom = section_geom
+        if fill_gaps and gaps:
+            estimated, gap_geom = gap_sections(gaps)
+            shown_ids = set(shown["Szakasz_id"])
+            # Fill a gap when either neighbour passes the filters
+            keep = estimated["Szomszedok"].map(lambda ids: bool(shown_ids & set(ids)))
+            shown = pd.concat([shown, estimated[keep].assign(
+                Nehez_szazalek=lambda d: 100 * d["Nehez_arany"])], ignore_index=True)
+            geom = section_geom | gap_geom
         shown = shown.dropna(subset=[line_col])
 
         fig_lines = go.Figure()
@@ -122,11 +160,13 @@ with tab_lines:
         # One trace per colour class: lines separated by None gaps keep the figure light
         edges = [-math.inf] + bins[1:] + [math.inf]
         classes = pd.cut(shown[line_col], edges, labels=False, right=False)
-        for i, color in enumerate(LINE_COLORS):
+        colors = sample_colorscale(LINE_SCALE, [i / (len(bins) - 1) for i in range(len(bins))])
+        traces = []
+        for i, color in enumerate(colors):
             part = shown[classes == i]
             lons, lats, hover = [], [], []
             for row in part.itertuples():
-                coords = section_geom[row.Szakasz_id]
+                coords = geom[row.Szakasz_id]
                 info = road_info.get(row.Ut, {})
                 text = (f"<b>{row.Ut}</b> ({row.Utkategoria}), {row.Megye}<br>"
                         f"{row.Kezdet_km:.3f}–{row.Veg_km:.3f} km<br>"
@@ -139,18 +179,20 @@ with tab_lines:
             lats_all += lats
             if i == 0:
                 name = f"< {fmt.format(bins[1])}"
-            elif i == len(LINE_COLORS) - 1:
+            elif i == len(colors) - 1:
                 name = f"≥ {fmt.format(bins[-1])}"
             else:
                 name = f"{fmt.format(bins[i])} – {fmt.format(bins[i + 1])}"
-            fig_lines.add_trace(go.Scattermap(
+            traces.append(go.Scattermap(
                 lon=lons, lat=lats, mode="lines", name=name.replace(",", " "),
-                line=dict(color=color, width=1.5 + 0.6 * i),
+                line=dict(color=color, width=1.3 + 4.2 * i / (len(colors) - 1)),
                 hovertext=hover, hoverinfo="text",
             ))
 
         lon_vals = [x for x in lons_all if x is not None]
         lat_vals = [y for y in lats_all if y is not None]
+        for trace in traces:
+            fig_lines.add_trace(trace)
         if lon_vals:
             span = max(max(lon_vals) - min(lon_vals), 1.6 * (max(lat_vals) - min(lat_vals)), 0.05)
             center = {"lon": (min(lon_vals) + max(lon_vals)) / 2,
@@ -175,6 +217,8 @@ with tab_lines:
             f"A szűrt úthossz {km_drawn:.0%}-a van a térképen; a megjelenített hossz "
             f"{stone_share:.0%}-ánál a szelvényezést OSM-kilométerkövekhez kalibráltuk, a többinél "
             "az út hossza mentén arányosan osztottuk fel (néhány száz méteres eltérés lehet). "
+            f"{shown.loc[shown['Szakasz_id'] < 0, 'Hossz_km'].sum():,.0f} km a táblázatból hiányzó, "
+            "a két szomszédos szakasz átlagával becsült rész. "
             "Útvonalak: © OpenStreetMap-közreműködők (ODbL), saját Overpass szerverről."
         )
 
