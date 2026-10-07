@@ -118,6 +118,19 @@ if location != "Mind":
 if LANE_FILTERS[lane_choice]:
     filtered = filtered[LANE_FILTERS[lane_choice](filtered)]
 
+# Traffic range on a logarithmic scale (1–1.5–2–3–5–7 steps per decade), 0 = no lower limit
+EANF_STEPS = [0] + [m * 10 ** e for e in range(1, 6) for m in (1, 1.5, 2, 3, 5, 7)
+                    if m * 10 ** e <= 200_000]
+EANF_STEPS = [int(v) for v in EANF_STEPS]
+eanf_lo, eanf_hi = st.sidebar.select_slider(
+    "ÉÁNF (Ej/nap)", options=EANF_STEPS, value=(EANF_STEPS[0], EANF_STEPS[-1]),
+    format_func=lambda v: f"{v:,}".replace(",", " "),
+    help="Logaritmikus skála: a csúszka minden tizedes nagyságrendre ugyanannyi helyet ad.",
+)
+EANF_FILTER = (eanf_lo, eanf_hi) != (EANF_STEPS[0], EANF_STEPS[-1])
+if EANF_FILTER:
+    filtered = filtered[filtered["EANF"].between(eanf_lo, eanf_hi)]
+
 if filtered.empty:
     st.warning("Nincs adat a kiválasztott szűrőkkel.")
     st.stop()
@@ -178,6 +191,8 @@ with tab_lines:
             shown = pd.concat([shown, estimated[keep].assign(
                 Nehez_szazalek=lambda d: 100 * d["Nehez_arany"])], ignore_index=True)
             geom = section_geom | gap_geom
+        if EANF_FILTER:
+            shown = shown[shown["EANF"].between(eanf_lo, eanf_hi)]
         shown = shown.dropna(subset=[line_col])
 
         fig_lines = go.Figure()
