@@ -128,6 +128,63 @@ for ref in set(by_ref) - set(source):
     source[ref] = "ref"
 
 
+# Carriageways with their lane counts, for the cross-section of each section
+def lane_count(value):
+    m = re.match(r"\s*(\d+)", value or "")
+    return int(m.group(1)) if m else None
+
+
+carriageways = []  # (line in metres, refs, lanes in the line's direction, against it)
+for way in ref_ways:
+    tags = way["tags"]
+    refs = split_refs(tags.get("ref")) & wanted
+    geom = way.get("geometry") or []
+    if not refs or len(geom) < 2 or tags["highway"].endswith("_link"):
+        continue
+    lanes = lane_count(tags.get("lanes"))
+    oneway = tags.get("oneway") in ("yes", "-1") or tags["highway"] == "motorway"
+    if oneway:
+        n = lanes or (2 if tags["highway"] in ("motorway", "trunk") else 1)
+        along, against = (0, n) if tags.get("oneway") == "-1" else (n, 0)
+    else:
+        fwd, bwd = lane_count(tags.get("lanes:forward")), lane_count(tags.get("lanes:backward"))
+        half = max(1, (lanes or 2) // 2)
+        along, against = fwd or half, bwd or half
+    carriageways.append((LineString(to_coords(geom)), refs, along, against))
+carriageway_tree = STRtree([c[0] for c in carriageways])
+
+
+def heading(line, dist):
+    a = line.interpolate(max(0.0, dist - 5))
+    b = line.interpolate(min(line.length, dist + 5))
+    return b.x - a.x, b.y - a.y
+
+
+def lanes_per_direction(piece, ref, step=150, radius=40):
+    """Median lanes per direction along a section (None if no tagged carriageway)."""
+    counts, divided = [], []
+    for d in np.linspace(0, piece.length, max(3, int(piece.length // step) + 1)):
+        p = piece.interpolate(d)
+        hx, hy = heading(piece, d)
+        fwd = bwd = ways = 0
+        for i in carriageway_tree.query(p, predicate="dwithin", distance=radius):
+            line, refs, along, against = carriageways[i]
+            if ref not in refs:
+                continue
+            wx, wy = heading(line, line.project(p))
+            same = hx * wx + hy * wy >= 0
+            fwd = max(fwd, along if same else against)
+            bwd = max(bwd, against if same else along)
+            ways += 1 if (along == 0 or against == 0) else 0
+        if fwd or bwd:
+            # A carriageway beyond the radius: assume the other direction is the same
+            counts.append(min(fwd, bwd) if fwd and bwd else max(fwd, bwd))
+            divided.append(ways >= 2)
+    if not counts:
+        return None, None
+    return int(np.median(counts)), bool(np.mean(divided) >= 0.5)
+
+
 def road_rank(ref):
     # Lower = more important (motorways first, then by number of digits / value)
     digits = re.sub(r"\D", "", ref) or "99999"
@@ -270,7 +327,7 @@ def to_lonlat(line, tolerance):
             (to_deg(*xy) for xy in line.simplify(tolerance).coords)]
 
 
-geometries, methods, gaps = {}, {}, []
+geometries, methods, gaps, lanes = {}, {}, [], {}
 for ref, road_sections in sections.dropna(subset=["Kezdet_km", "Veg_km"]).groupby("Ut"):
     if ref not in by_ref:
         continue
@@ -295,12 +352,17 @@ for ref, road_sections in sections.dropna(subset=["Kezdet_km", "Veg_km"]).groupb
         s1 = min(chain.length, km_to_m(row.Veg_km))
         if s1 - s0 < 1:
             continue
-        geometries[int(row.Szakasz_id)] = to_lonlat(substring(chain, s0, s1), 15)
+        piece = substring(chain, s0, s1)
+        geometries[int(row.Szakasz_id)] = to_lonlat(piece, 15)
+        per_dir, divided = lanes_per_direction(piece, ref)
+        if per_dir:
+            lanes[int(row.Szakasz_id)] = [per_dir, divided]
 
 with gzip.open(OUT, "wt", encoding="utf-8") as f:
     json.dump({"sections": geometries,
                "roads": {ref: {"forras": src, "kalibracio": m} for ref, (src, m) in methods.items()},
-               "gaps": gaps},
+               "gaps": gaps,
+               "lanes": lanes},
               f, ensure_ascii=False, separators=(",", ":"))
 
 # === 4. Coverage report
@@ -312,5 +374,8 @@ print(f"✅ {sections['Geometria'].sum()} / {len(sections)} sections with geomet
       f"({km_share:.0%} of road length) saved to {OUT}")
 print(f"   {len(gaps)} chainage gaps ({sum(g['k1'] - g['k0'] for g in gaps):,.0f} km) "
       "between neighbouring sections")
+sections["Savok"] = sections["Szakasz_id"].map(lambda i: f"2×{lanes[i][0]}" if i in lanes else "?")
+print(sections.pivot_table(index="Utkategoria", columns="Savok", values="Hossz_km",
+                           aggfunc="sum").round(0).fillna(0).to_string())
 print(sections.pivot_table(index="Utkategoria", columns="Modszer", values="Hossz_km",
                            aggfunc="sum").round(0).fillna(0).to_string())
