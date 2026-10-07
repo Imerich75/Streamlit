@@ -21,6 +21,8 @@ SEQ_BLUE = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#
 BAR_BLUE = "#2a78d6"
 # Traffic-map convention: light yellow (quiet) through red to dark purple (busy)
 LINE_SCALE = ["#ffe680", "#fdb44b", "#f7782a", "#e2401f", "#bb1428", "#860632", "#4b0a3c"]
+# On the dark basemap brightness runs the other way: dim purple (quiet) to glowing yellow (busy)
+LINE_SCALE_DARK = ["#5c2a8a", "#9b2f7f", "#d6456c", "#f6734f", "#fdab53", "#fde26b", "#fffbd0"]
 # Lower class bounds; the last class is open-ended
 LINE_METRICS = {
     "ÉÁNF (Ej/nap)": ("EANF", [0, 500, 1_000, 2_000, 3_000, 5_000, 7_500, 10_000, 15_000,
@@ -158,6 +160,7 @@ with tab_lines:
             help="Ahol a Magyar Közút táblázatából kimarad egy szelvényszakasz, ott a két "
                  "szomszédos szakasz átlagát mutatjuk (a tooltipben „becsült”).",
         )
+        dark = c4.toggle("🌙 Sötét térkép", help="Sötét OpenStreetMap-alaptérkép (CARTO Dark Matter)")
 
         line_col, bins, fmt = LINE_METRICS[line_label]
         shown = filtered[filtered["Szakasz_id"].isin(section_geom)].assign(
@@ -182,7 +185,8 @@ with tab_lines:
         # One trace per colour class: lines separated by None gaps keep the figure light
         edges = [-math.inf] + bins[1:] + [math.inf]
         classes = pd.cut(shown[line_col], edges, labels=False, right=False)
-        colors = sample_colorscale(LINE_SCALE, [i / (len(bins) - 1) for i in range(len(bins))])
+        colors = sample_colorscale(LINE_SCALE_DARK if dark else LINE_SCALE,
+                                   [i / (len(bins) - 1) for i in range(len(bins))])
         traces = []
         for i, color in enumerate(colors):
             part = shown[classes == i]
@@ -224,10 +228,12 @@ with tab_lines:
         else:
             center, zoom = {"lat": 47.16, "lon": 19.5}, 6
         fig_lines.update_layout(
-            map=dict(style="carto-positron", center=center, zoom=zoom),
+            map=dict(style="carto-darkmatter" if dark else "carto-positron",
+                     center=center, zoom=zoom),
             height=640, margin=dict(r=0, l=0, t=10, b=0),
             legend=dict(title=line_label, yanchor="top", y=0.98, xanchor="left", x=0.01,
-                        bgcolor="rgba(255,255,255,0.85)"),
+                        bgcolor="rgba(20,20,24,0.85)" if dark else "rgba(255,255,255,0.85)",
+                        font=dict(color="#e8e8e8" if dark else "#262730")),
         )
         st.plotly_chart(fig_lines, use_container_width=True)
 
