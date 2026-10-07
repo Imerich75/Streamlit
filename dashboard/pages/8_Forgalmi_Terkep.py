@@ -94,11 +94,19 @@ categories = st.sidebar.multiselect(
     "Útkategória", CATEGORY_ORDER, default=CATEGORY_ORDER
 )
 location = st.sidebar.radio("Fekvés", ["Mind", "Külterület", "Belterület"], horizontal=True)
-LANE_FILTERS = {"Mind": None, "2×2 vagy több": (2, 99), "2×3 vagy több": (3, 99),
-                "Csak 2×1": (1, 1)}
+EXPRESSWAYS = ["autópálya", "autóút"]
+LANE_FILTERS = {
+    "Mind": None,
+    "Gyorsforgalmi + 2×2 vagy több": lambda d: d["Utkategoria"].isin(EXPRESSWAYS) | (d["Savok"] >= 2),
+    "2×2 vagy több": lambda d: d["Savok"] >= 2,
+    "2×3 vagy több": lambda d: d["Savok"] >= 3,
+    "Csak 2×1": lambda d: d["Savok"] == 1,
+}
 lane_choice = st.sidebar.selectbox(
     "Sávszám", list(LANE_FILTERS),
     help="Forgalmi sávok irányonként az OpenStreetMap alapján (pl. 2×2 = irányonként 2 sáv). "
+         "A „Gyorsforgalmi” opció az összes autópályát és autóutat is mutatja, sávszámtól "
+         "függetlenül. "
          "Csomópontoknál a gyorsító-lassító sávok miatt egy szakasz többnek látszhat.",
 )
 
@@ -106,8 +114,7 @@ filtered = df[df["Utkategoria"].isin(categories)]
 if location != "Mind":
     filtered = filtered[filtered["Fekves"] == location]
 if LANE_FILTERS[lane_choice]:
-    lo, hi = LANE_FILTERS[lane_choice]
-    filtered = filtered[filtered["Savok"].between(lo, hi)]
+    filtered = filtered[LANE_FILTERS[lane_choice](filtered)]
 
 if filtered.empty:
     st.warning("Nincs adat a kiválasztott szűrőkkel.")
