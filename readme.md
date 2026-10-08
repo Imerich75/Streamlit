@@ -59,7 +59,7 @@ scikit-learn (for offline retraining)
 
 📌 App Modules
 Page	Purpose
-Forgalmi Térkép (dashboard/app.py)	Hungarian national road traffic (Magyar Közút preliminary ÉÁNF 2025): road-section map coloured by traffic, county map, busiest roads, road profile, vehicle mix
+Forgalmi Térkép (dashboard/forgalmi_terkep.py, started by dashboard/app.py)	Hungarian national road traffic (Magyar Közút preliminary ÉÁNF 2025): road-section map coloured by traffic, county map, busiest roads, road profile, vehicle mix
 The earlier cyber-risk pages were removed from the app; their scripts and data files remain in the repository.
 📃 License
 MIT — free for educational, research and public use.
