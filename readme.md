@@ -47,7 +47,7 @@ Edit
 git clone https://github.com/Imerich75/Streamlit
 cd cyber-risk-dashboard
 pip install -r requirements.txt
-streamlit run app.py
+streamlit run dashboard/app.py
 🌐 Requirements
 Python 3.8+
 
@@ -59,14 +59,8 @@ scikit-learn (for offline retraining)
 
 📌 App Modules
 Page	Purpose
-Vanilla BI	Simple charts for GDP, risk metrics
-Risk Discrepancy	Visualizing model bias & anomalies
-Transparency Map	Detection of underreporting
-Threat Explorer	Custom scatter visualizations
-Log Insights	Log-scaled metrics across dimensions
-2025–2030 Forecast	Future attack projections (no retraining)
-Data Browser	Table-based preview of full dataset
-Forgalmi Térkép	Hungarian national road traffic (Magyar Közút preliminary ÉÁNF 2025): road-section map coloured by traffic, county map, busiest roads, road profile, vehicle mix
+Forgalmi Térkép (dashboard/app.py)	Hungarian national road traffic (Magyar Közút preliminary ÉÁNF 2025): road-section map coloured by traffic, county map, busiest roads, road profile, vehicle mix
+The earlier cyber-risk pages were removed from the app; their scripts and data files remain in the repository.
 📃 License
 MIT — free for educational, research and public use.
 
