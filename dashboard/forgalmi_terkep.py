@@ -173,7 +173,16 @@ with tab_lines:
             help="Ahol a Magyar Közút táblázatából kimarad egy szelvényszakasz, ott a két "
                  "szomszédos szakasz átlagát mutatjuk (a tooltipben „becsült”).",
         )
-        dark = c4.toggle("🌙 Sötét térkép", help="Sötét OpenStreetMap-alaptérkép (CARTO Dark Matter)")
+        # Follow the viewer's light/dark theme until they flip the switch themselves
+        system_dark = getattr(st.context.theme, "type", None) == "dark"
+        if not st.session_state.get("dark_map_touched"):
+            st.session_state["dark_map"] = system_dark
+        dark = c4.toggle(
+            "🌙 Sötét térkép", key="dark_map",
+            on_change=lambda: st.session_state.update(dark_map_touched=True),
+            help="Sötét OpenStreetMap-alaptérkép (CARTO Dark Matter). Alapból a böngésző / "
+                 "rendszer világos vagy sötét módját követi.",
+        )
 
         line_col, bins, fmt = LINE_METRICS[line_label]
         shown = filtered[filtered["Szakasz_id"].isin(section_geom)].assign(
